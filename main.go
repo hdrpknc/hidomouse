@@ -2,64 +2,74 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
-	"os/exec"
-	"runtime"
 	"syscall"
 	"time"
 	"unsafe"
 )
 
 func main() {
-	fmt.Println("Mouse will move until you press 'ESC'...")
+	fmt.Println("Mouse will move in a circle until you press 'ESC'...")
 
-	// Start listening for ESC key in a goroutine
+	// Start listening for ESC key in a separate goroutine
 	go listenForEsc()
 
-	// Move mouse continuously
+	// Get the current mouse position as the center
+	cx, cy := getMousePosition()
+	radius := 100.0
+	angle := 0.0
+
 	for {
-		moveMouse()
-		time.Sleep(1 * time.Second) // Adjust speed if necessary
+		x := cx + int(radius*math.Cos(angle))
+		y := cy + int(radius*math.Sin(angle))
+		moveMouse(x, y)
+
+		angle += 0.1
+		if angle > 2*math.Pi {
+			angle = 0
+		}
+
+		time.Sleep(50 * time.Millisecond) // Adjust speed if necessary
 	}
 }
 
-// moveMouse moves the mouse slightly on different OS
-func moveMouse() {
-	switch runtime.GOOS {
-	case "windows":
-		moveMouseWindows()
-	case "linux":
-		exec.Command("sh", "-c", "xdotool mousemove_relative 1 0").Run()
-	case "darwin":
-		exec.Command("sh", "-c", "osascript -e 'tell application \"System Events\" to move mouse by {1, 0}'").Run()
-	default:
-		fmt.Println("Unsupported OS")
-		os.Exit(1)
-	}
-}
-
-// moveMouseWindows moves the mouse on Windows using syscall
-func moveMouseWindows() {
+// moveMouse moves the mouse to a specific (x, y) position on Windows
+func moveMouse(x, y int) {
 	user32 := syscall.NewLazyDLL("user32.dll")
 	setCursorPos := user32.NewProc("SetCursorPos")
+	_, _, err := setCursorPos.Call(uintptr(x), uintptr(y))
+	if err != nil && err.Error() != "The operation completed successfully." {
+		fmt.Println("Error moving mouse:", err)
+	}
+}
+
+// getMousePosition gets the current mouse position on Windows
+func getMousePosition() (int, int) {
+	user32 := syscall.NewLazyDLL("user32.dll")
 	getCursorPos := user32.NewProc("GetCursorPos")
 
-	// Define a struct to hold the mouse position
 	type POINT struct {
 		X, Y int32
 	}
 
 	var pt POINT
-	getCursorPos.Call(uintptr(unsafe.Pointer(&pt))) // Get current mouse position
-	setCursorPos.Call(uintptr(pt.X+1), uintptr(pt.Y)) // Move mouse slightly
+	_, _, err := getCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
+	if err != nil && err.Error() != "The operation completed successfully." {
+		fmt.Println("Error getting mouse position:", err)
+	}
+	return int(pt.X), int(pt.Y)
 }
 
-// listenForEsc listens for ESC key and stops the program
+// listenForEsc detects ESC keypress on Windows
 func listenForEsc() {
+	user32 := syscall.NewLazyDLL("user32.dll")
+	getAsyncKeyState := user32.NewProc("GetAsyncKeyState")
+
 	for {
-		var b = make([]byte, 1)
-		os.Stdin.Read(b)
-		if b[0] == 27 { // ASCII 27 = ESC key
+		time.Sleep(10 * time.Millisecond)
+		escPressed, _, _ := getAsyncKeyState.Call(uintptr(0x1B)) // 0x1B = VK_ESCAPE
+		if escPressed&0x8000 != 0 { // Check if the high bit is set (key is pressed)
 			fmt.Println("\nESC pressed! Stopping...")
 			os.Exit(0)
 		}
